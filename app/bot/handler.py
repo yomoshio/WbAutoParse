@@ -9,7 +9,10 @@ from functools import partial
 from app.parsers.parser import parse_wb_product
 from app.bot.services.keyword import SearchKeywords
 from app.api.v1.WB_stat import WB_stat
+from app.bot.services.keyword_position import find_product_position
 import aiohttp
+from app.utils.extract_vendor import extract_article_from_url
+
 
 router = Router()
 
@@ -35,6 +38,13 @@ async def cmd_search(message: Message, state: FSMContext, chat_gpt):
 
 async def process_url(message: Message, state: FSMContext, chat_gpt):
     url = message.text.strip()
+    article = extract_article_from_url(url)
+    
+    if not article:
+        await message.answer("❌ Не удалось извлечь артикул из ссылки. Убедитесь, что ссылка корректна.")
+        await state.clear()
+        return
+
     await message.answer("🔍 Обрабатываю ссылку...")
 
     try:
@@ -44,9 +54,9 @@ async def process_url(message: Message, state: FSMContext, chat_gpt):
         await message.answer(f"❌ Не удалось получить данные товара: {e}")
         await state.clear()
         return
-
     async with aiohttp.ClientSession() as session:
         try:
+            
             keyword_generator = SearchKeywords(chat_gpt=chat_gpt)
             keywords = await keyword_generator.generate_keywords(session=session, title=title, description=description)
         except Exception as e:
@@ -54,16 +64,14 @@ async def process_url(message: Message, state: FSMContext, chat_gpt):
             await state.clear()
             return
 
-        stats = WB_stat()
-        total_sum = 0
-        results = []
+    await message.answer("📈 Ищу позиции товара по ключевым словам, это может занять немного времени...")
 
-        for kw in keywords:
-            total = await stats.get_total(session, kw)
-            total_sum += total
-            results.append(f"{kw} — {total}")
+    results = []
+    for kw in keywords:
+        pos = await find_product_position(kw, article)
+        result_line = f"🔎 {kw} — {'позиция ' + str(pos) if pos else '❌ не найден'}"
+        results.append(result_line)
 
-    response = "\n".join(results[:20])
-    await message.answer(f"📊 Ключевые слова и частотность:\n\n{response}\n\nОбщая сумма: {total_sum}")
+    await message.answer("\n".join(results[:20]))
 
-    await state.clear()  
+    await state.clear()
